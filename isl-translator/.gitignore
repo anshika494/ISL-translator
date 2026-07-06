@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+env/
+.env
+
+# Dataset (exclude raw data, keep small samples)
+data_collection/data/
+!data_collection/data/.gitkeep
+!data_collection/data/sample/
+
+# Model checkpoints
+training/checkpoints/
+training/plots/
+
+# ONNX model (large — re-export from checkpoint)
+frontend/public/model.onnx
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env files
+.env
+.env.local
+
+# Logs
+*.log
+logs/
