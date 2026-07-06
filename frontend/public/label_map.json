@@ -8,5 +8,12 @@
   "help": 6,
   "water": 7,
   "food": 8,
-  "home": 9
+  "home": 9,
+  "accident": 10,
+  "doctor": 11,
+  "call": 12,
+  "hot": 13,
+  "lose": 14,
+  "pain": 15,
+  "thief": 16
 }
