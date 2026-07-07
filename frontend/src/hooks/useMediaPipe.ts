@@ -22,6 +22,17 @@ export interface MediaPipeState {
   isReady: boolean;
   error: string | null;
   latestKeypoints: Float32Array | null;
+  /**
+   * True only when the current frame actually contains a detected pose
+   * (i.e. a person is visibly in frame). This is distinct from `isReady`,
+   * which only reflects whether the MediaPipe model finished loading.
+   *
+   * Fixed: previously the UI's "Tracking Active" badge was driven solely by
+   * `isReady`, so a user who stepped out of frame (or was in bad lighting
+   * with no landmarks detected at all) still saw a green "active" badge —
+   * actively wrong information at exactly the moment it mattered.
+   */
+  isPoseDetected: boolean;
   processFrame: (video: HTMLVideoElement, canvas: HTMLCanvasElement) => void;
 }
 
@@ -64,6 +75,14 @@ function extractKeypoints(result: any): Float32Array {
   }
 
   return out;
+}
+
+// Fixed (Bug #6): a real, single source of truth for "is a person actually
+// visible right now" — a pose is only considered present if MediaPipe
+// returned at least one pose landmark set for this frame.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function hasDetectedPose(result: any): boolean {
+  return Boolean(result.poseLandmarks && result.poseLandmarks.length > 0);
 }
 
 // ── Skeleton drawing ───────────────────────────────────────────────────────────
@@ -144,6 +163,7 @@ export function useMediaPipe(): MediaPipeState {
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [latestKeypoints, setLatestKeypoints] = useState<Float32Array | null>(null);
+  const [isPoseDetected, setIsPoseDetected] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,9 +217,10 @@ export function useMediaPipe(): MediaPipeState {
       if (ctx) drawSkeleton(ctx, result);
 
       setLatestKeypoints(extractKeypoints(result));
+      setIsPoseDetected(hasDetectedPose(result));
     },
     [isReady]
   );
 
-  return { isReady, error, latestKeypoints, processFrame };
+  return { isReady, error, latestKeypoints, isPoseDetected, processFrame };
 }
