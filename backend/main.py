@@ -118,7 +118,9 @@ async def ws_infer(websocket: WebSocket) -> None:
             raw = await websocket.receive_text()
             msg = json.loads(raw)
 
-            if msg.get("type") == "frame":
+            msg_type = msg.get("type")
+
+            if msg_type == "frame":
                 kp_list = msg.get("keypoints", [])
                 if len(kp_list) != FEATURE_DIM:
                     await websocket.send_json({
@@ -133,16 +135,29 @@ async def ws_infer(websocket: WebSocket) -> None:
                 if result is not None:
                     await websocket.send_json({"type": "prediction", **result})
                 else:
-                    # Optional: send buffer status so frontend can show live progress
+                    # Status includes pose_missing so the frontend can show an
+                    # accurate "no person detected" state instead of a generic
+                    # "tracking active" badge that's only ever based on
+                    # whether the model loaded.
                     await websocket.send_json({
                         "type": "status",
                         "buffer_length": buffer.buffer_length,
                         "is_active": buffer.is_active,
+                        "pose_missing": buffer.pose_missing,
                     })
 
-            elif msg.get("type") == "reset":
+            elif msg_type == "reset":
                 buffer._reset()
                 await websocket.send_json({"type": "reset_ack"})
+
+            else:
+                # Fixed: previously unrecognized message types were silently
+                # dropped, which made client-side debugging harder than it
+                # needed to be.
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Unrecognized message type: {msg_type!r}",
+                })
 
     except WebSocketDisconnect:
         pass
