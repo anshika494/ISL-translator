@@ -165,7 +165,17 @@ def _load_all_clips() -> tuple[list[Path], list[int], dict[str, int]]:
     filepaths: list[Path] = []
     labels: list[int] = []
 
-    for word in VOCABULARY:
+    # Fixed (defense-in-depth): dedupe VOCABULARY before iterating. config.py
+    # now asserts uniqueness at import time, but if that guard is ever
+    # removed or bypassed, a duplicate word here would silently double-load
+    # every clip for that word (and could leak the same physical clip into
+    # both the train and test splits). dict.fromkeys preserves order.
+    seen_words = list(dict.fromkeys(VOCABULARY))
+    if len(seen_words) != len(VOCABULARY):
+        dupes = [w for w in set(VOCABULARY) if VOCABULARY.count(w) > 1]
+        print(f"  [WARN] Duplicate word(s) in VOCABULARY, ignoring repeats: {dupes}")
+
+    for word in seen_words:
         word_dir = DATA_DIR / word
         if not word_dir.exists():
             print(f"  [WARN] No data found for '{word}' — skipping.")
