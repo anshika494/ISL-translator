@@ -15,6 +15,14 @@ Adding a new word:
 # ── Vocabulary ────────────────────────────────────────────────────────────────
 # V1: 10-word starter set for the initial working loop.
 # Uncomment additional words to expand the vocabulary (Phase 2 / stretch goal).
+#
+# NOTE (fixed): "help" previously appeared TWICE in this list. That caused
+# _load_all_clips() in training/dataset.py to glob the same data/help/*.npy
+# directory twice, duplicating every "help" clip in the dataset and allowing
+# the same physical clip to land in both the train and test splits (data
+# leakage), which inflated reported accuracy for that class. Keep each word
+# unique — there's no test for accidental duplicates, so double-check by eye
+# when adding new words.
 
 VOCABULARY = [
     "hello",
@@ -30,7 +38,6 @@ VOCABULARY = [
     "accident",
     "doctor",
     "call",
-    "help",
     "hot",
     "lose",
     "pain",
@@ -64,6 +71,11 @@ VOCABULARY = [
     # "mother",
     # "father",
 ]
+
+assert len(VOCABULARY) == len(set(VOCABULARY)), (
+    "Duplicate word(s) found in VOCABULARY — this silently duplicates clips "
+    "in the dataset. Check config.py."
+)
 
 # ── Clip Settings ─────────────────────────────────────────────────────────────
 # Number of frames per clip (pad/truncate to this length at inference time too)

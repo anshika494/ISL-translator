@@ -100,3 +100,4 @@ The training data represents a single signer and signing style. The model may sy
 | Version | Date | Changes |
 |---------|------|---------|
 | v1.0 | 2024 | Initial 10-class BiLSTM baseline |
+| v1.1 | 2026 | Fixed duplicate "help" entry in VOCABULARY (config.py) that was silently duplicating clips in the training set; added gesture-boundary "no person in frame" detection |

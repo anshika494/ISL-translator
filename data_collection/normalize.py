@@ -135,6 +135,43 @@ def normalize_frame(keypoints: np.ndarray) -> np.ndarray:
     return all_landmarks.flatten().astype(np.float32)
 
 
+def is_pose_present(frame: np.ndarray, atol: float = 1e-9) -> bool:
+    """
+    Detect whether a keypoint frame actually contains a detected pose, or is
+    the all-zero "nothing detected" placeholder produced by extract_keypoints()
+    when MediaPipe found no person in view.
+
+    This works on BOTH raw and normalize_frame()-processed vectors: when no
+    pose is detected, extract_keypoints() emits zeros for the pose block, and
+    normalize_frame() explicitly passes zero pose blocks straight through
+    (shoulder_width < 1e-6 early-return), so the shoulder landmarks stay
+    exactly (0, 0, 0) in either case. A genuinely normalized frame can never
+    have both shoulder landmarks sitting exactly at the origin, since
+    normalization forces the shoulder midpoint to (0, 0) and the shoulders
+    themselves to be offset by ±half the (nonzero) shoulder width.
+
+    Fixes: gesture-boundary logic previously treated "no person in frame" as
+    just another idle frame (zero-to-zero velocity), which could trigger a
+    gesture boundary on a truncated, mostly-empty sequence and emit a
+    confident-looking but meaningless prediction if a user stepped out of
+    frame mid-sign.
+
+    Args:
+        frame: (225,) keypoint vector, raw or normalized.
+        atol: absolute tolerance for the "is it exactly zero" check.
+
+    Returns:
+        True if a pose appears to be present, False if this looks like an
+        empty/no-detection frame.
+    """
+    left_shoulder = frame[_LEFT_SHOULDER_IDX * 3: _LEFT_SHOULDER_IDX * 3 + 3]
+    right_shoulder = frame[_RIGHT_SHOULDER_IDX * 3: _RIGHT_SHOULDER_IDX * 3 + 3]
+    return not (
+        np.allclose(left_shoulder, 0.0, atol=atol)
+        and np.allclose(right_shoulder, 0.0, atol=atol)
+    )
+
+
 # ── Sequence Processing ────────────────────────────────────────────────────────
 
 def pad_or_truncate(
