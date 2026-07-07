@@ -16,8 +16,15 @@ import { PredictionDisplay } from './components/PredictionDisplay';
 import { useMediaPipe } from './hooks/useMediaPipe';
 import { inferenceEngine, type Prediction, CLIP_LENGTH } from './lib/onnxInference';
 
+// Fixed (Bug #2): this used to be hardcoded to 'https://github.com' (the
+// GitHub homepage, not the actual repo). Set VITE_GITHUB_URL in a .env.local
+// file to point this at your real repo; falls back to a clearly-labeled
+// placeholder so it's obvious this still needs to be configured rather than
+// silently linking somewhere wrong.
+const GITHUB_URL = import.meta.env.VITE_GITHUB_URL ?? 'https://github.com/YOUR_USERNAME/isl-translator';
+
 export default function App() {
-  const { isReady, error: mpError, latestKeypoints, processFrame } = useMediaPipe();
+  const { isReady, error: mpError, latestKeypoints, isPoseDetected, processFrame } = useMediaPipe();
 
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -78,15 +85,16 @@ export default function App() {
           </div>
           <div className="header-links">
             <a
-              href="https://github.com"
+              href={GITHUB_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="header-link"
               id="github-link"
+              aria-label="View source code on GitHub (opens in a new tab)"
             >
               GitHub
             </a>
-            <span className="header-badge">v1 · 10 signs</span>
+            <span className="header-badge">v1 · 17 signs</span>
           </div>
         </div>
       </header>
@@ -117,6 +125,7 @@ export default function App() {
             />
             <KeypointOverlay
               isMediaPipeReady={isReady}
+              isPoseDetected={isPoseDetected}
               isActive={bufferStatus.isActive}
               bufferLength={bufferStatus.bufferLength}
               maxBuffer={CLIP_LENGTH}
@@ -152,6 +161,10 @@ export default function App() {
         <p>
           Built for India's 18M+ deaf/hard-of-hearing community ·{' '}
           <strong>Disclaimer:</strong> This is a research tool, not a certified interpreter.
+          {/* Fixed (Bug #3): this used to point at /docs/MODEL_CARD.md, which
+              doesn't exist anywhere in the Vite build (docs/ lives at the repo
+              root, outside frontend/public/) and 404s once deployed. The file
+              is now copied into frontend/public/docs/ so this link resolves. */}
           See <a href="/docs/MODEL_CARD.md" className="footer-link">Model Card</a> for limitations.
         </p>
         <p>
