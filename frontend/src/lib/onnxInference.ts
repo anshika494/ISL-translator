@@ -25,6 +25,13 @@ const MAX_BUFFER_FRAMES = CLIP_LENGTH * 2;
 const LEFT_WRIST_IDX = 15;
 const RIGHT_WRIST_IDX = 16;
 
+// Shoulder landmark indices — used to detect "no pose in frame" (see
+// isPosePresent below). Mirrors data_collection/normalize.py's
+// is_pose_present() so the client-side and backend gesture-boundary logic
+// stay in sync.
+const LEFT_SHOULDER_IDX = 11;
+const RIGHT_SHOULDER_IDX = 12;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Prediction {
@@ -36,6 +43,8 @@ export interface Prediction {
 export interface BufferStatus {
   bufferLength: number;
   isActive: boolean;
+  /** True if the most recently pushed frame had no detected pose at all. */
+  poseMissing: boolean;
 }
 
 // ── Normalization (mirrors Python normalize.py) ───────────────────────────────
@@ -68,6 +77,33 @@ export function normalizeFrame(keypoints: Float32Array): Float32Array {
     kp[i * 3 + 2] = kp[i * 3 + 2] / shoulderWidth; // scale z only
   }
   return kp;
+}
+
+/**
+ * Fixed (Bug #4): detect whether a frame actually contains a detected pose,
+ * or is the all-zero "nothing in view" placeholder. Works on raw or
+ * normalized frames for the same reason as the Python is_pose_present():
+ * normalizeFrame() explicitly passes an all-zero pose block straight through
+ * when shoulderWidth < 1e-6, and a genuinely normalized frame can never have
+ * both shoulders sitting exactly at the origin (normalization forces the
+ * shoulder *midpoint* to (0,0), not the shoulders themselves).
+ *
+ * Without this check, two consecutive "nobody in frame" frames produce a
+ * wrist velocity of exactly 0 — indistinguishable from a genuinely idle
+ * hand — which could trigger a gesture boundary on a truncated, mostly
+ * empty sequence if the signer stepped out of frame mid-sign.
+ */
+export function isPosePresent(frame: Float32Array, atol = 1e-9): boolean {
+  const lsx = frame[LEFT_SHOULDER_IDX * 3];
+  const lsy = frame[LEFT_SHOULDER_IDX * 3 + 1];
+  const lsz = frame[LEFT_SHOULDER_IDX * 3 + 2];
+  const rsx = frame[RIGHT_SHOULDER_IDX * 3];
+  const rsy = frame[RIGHT_SHOULDER_IDX * 3 + 1];
+  const rsz = frame[RIGHT_SHOULDER_IDX * 3 + 2];
+
+  const leftIsZero = Math.abs(lsx) <= atol && Math.abs(lsy) <= atol && Math.abs(lsz) <= atol;
+  const rightIsZero = Math.abs(rsx) <= atol && Math.abs(rsy) <= atol && Math.abs(rsz) <= atol;
+  return !(leftIsZero && rightIsZero);
 }
 
 /**
@@ -134,6 +170,7 @@ export class ONNXInferenceEngine {
   private buffer: Float32Array[] = [];
   private idleCount = 0;
   private isActive = false;
+  private poseMissing = false;
 
   async load(modelUrl = '/model.onnx', labelMapUrl = '/label_map.json'): Promise<void> {
     // Configure ONNX runtime to use WASM backend
@@ -169,84 +206,6 @@ export class ONNXInferenceEngine {
   }
 
   /**
-   * Push a single normalized keypoint frame into the gesture buffer.
-   * Returns a Prediction if a gesture boundary is detected, else null.
-   * Also returns a BufferStatus for UI progress display.
-   */
-  pushFrame(rawKeypoints: Float32Array): {
-    prediction: Prediction | null;
-    status: BufferStatus;
-  } {
-    if (!this.isLoaded || !this.session) {
-      return { prediction: null, status: { bufferLength: 0, isActive: false } };
-    }
-
-    const frame = normalizeFrame(rawKeypoints);
-
-    const prevFrame = this.buffer.length > 0 ? this.buffer[this.buffer.length - 1] : null;
-
-    // Enforce max buffer size
-    if (this.buffer.length >= MAX_BUFFER_FRAMES) {
-      this.buffer.shift();
-    }
-    this.buffer.push(frame);
-
-    // Check velocity to detect gesture boundary
-    let prediction: Prediction | null = null;
-
-    if (prevFrame) {
-      const vel = wristVelocity(prevFrame, frame);
-
-      if (vel > IDLE_VELOCITY_THRESHOLD) {
-        this.idleCount = 0;
-        this.isActive = true;
-      } else {
-        this.idleCount++;
-      }
-
-      if (
-        this.isActive &&
-        this.idleCount >= IDLE_FRAMES_REQUIRED &&
-        this.buffer.length >= MIN_GESTURE_FRAMES
-      ) {
-        // Extract gesture frames (exclude trailing idle frames)
-        const gestureFrames = this.buffer.slice(0, -IDLE_FRAMES_REQUIRED);
-        if (gestureFrames.length >= MIN_GESTURE_FRAMES) {
-          prediction = this._runInference(gestureFrames);
-          this._resetBuffer();
-        }
-      }
-    }
-
-    return {
-      prediction,
-      status: {
-        bufferLength: this.buffer.length,
-        isActive: this.isActive,
-      },
-    };
-  }
-
-  private _runInference(frames: Float32Array[]): Prediction | null {
-    if (!this.session) return null;
-
-    try {
-      const flat = padOrTruncate(frames);
-      // Shape: [1, CLIP_LENGTH, FEATURE_DIM]
-      const inputTensor = new ort.Tensor('float32', flat, [1, CLIP_LENGTH, FEATURE_DIM]);
-      const feeds: Record<string, ort.Tensor> = { keypoints: inputTensor };
-
-      // Synchronous-style: we use runSync if available, else we need async
-      // Note: onnxruntime-web v1.20+ supports session.run() which returns a Promise
-      // We handle this with a queued approach — see useONNXInference hook
-      // For now, we expose an async predict method separately
-      return null; // placeholder — actual call is in predictAsync
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * Async inference on a complete gesture sequence.
    * Called internally by pushFrameAsync.
    */
@@ -271,18 +230,42 @@ export class ONNXInferenceEngine {
   }
 
   /**
-   * Async version of pushFrame.
-   * Use this in your React hook so inference doesn't block the main thread.
+   * Push a single normalized keypoint frame into the gesture buffer, run
+   * inference when a gesture boundary is detected, and report buffer status
+   * for UI progress display.
+   *
+   * Fixed (Bug #4): frames with no detected pose (isPosePresent === false)
+   * are no longer counted toward the idle/active state or appended to the
+   * buffer — they're treated as "no signal" rather than "hand at rest",
+   * which previously could trigger a boundary on a truncated sequence if
+   * the signer stepped out of frame mid-gesture.
    */
   async pushFrameAsync(rawKeypoints: Float32Array): Promise<{
     prediction: Prediction | null;
     status: BufferStatus;
   }> {
     if (!this.isLoaded) {
-      return { prediction: null, status: { bufferLength: 0, isActive: false } };
+      return {
+        prediction: null,
+        status: { bufferLength: 0, isActive: false, poseMissing: false },
+      };
     }
 
     const frame = normalizeFrame(rawKeypoints);
+
+    if (!isPosePresent(frame)) {
+      this.poseMissing = true;
+      return {
+        prediction: null,
+        status: {
+          bufferLength: this.buffer.length,
+          isActive: this.isActive,
+          poseMissing: true,
+        },
+      };
+    }
+    this.poseMissing = false;
+
     const prevFrame = this.buffer.length > 0 ? this.buffer[this.buffer.length - 1] : null;
 
     if (this.buffer.length >= MAX_BUFFER_FRAMES) this.buffer.shift();
@@ -314,7 +297,11 @@ export class ONNXInferenceEngine {
 
     return {
       prediction,
-      status: { bufferLength: this.buffer.length, isActive: this.isActive },
+      status: {
+        bufferLength: this.buffer.length,
+        isActive: this.isActive,
+        poseMissing: false,
+      },
     };
   }
 
