@@ -3,7 +3,7 @@
  * and text-to-speech controls.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Prediction } from '../lib/onnxInference';
 
 interface PredictionDisplayProps {
@@ -12,6 +12,14 @@ interface PredictionDisplayProps {
   modelError: string | null;
 }
 
+// Fixed (Bug #7): previously any repeated word was unconditionally suppressed
+// forever until a different word interrupted it, so a user who legitimately
+// signed the same word twice in a row (e.g. "no no") only ever got one word
+// added and one spoken utterance. A short cooldown absorbs noisy re-triggers
+// of the SAME physical gesture (the original goal) without permanently
+// blocking a deliberate repeat.
+const REPEAT_COOLDOWN_MS = 1500;
+
 export function PredictionDisplay({
   prediction,
   isModelLoaded,
@@ -19,14 +27,22 @@ export function PredictionDisplay({
 }: PredictionDisplayProps) {
   const [sentence, setSentence] = useState<string[]>([]);
   const [ttsEnabled, setTtsEnabled] = useState(false);
-  const [lastPredictionWord, setLastPredictionWord] = useState<string | null>(null);
+  const lastPredictionRef = useRef<{ word: string; at: number } | null>(null);
 
   // Add prediction to sentence log and speak
   useEffect(() => {
     if (!prediction) return;
-    if (prediction.word === lastPredictionWord) return; // de-duplicate
 
-    setLastPredictionWord(prediction.word);
+    const now = Date.now();
+    const last = lastPredictionRef.current;
+    const isNoisyRepeat =
+      last !== null &&
+      last.word === prediction.word &&
+      now - last.at < REPEAT_COOLDOWN_MS;
+
+    if (isNoisyRepeat) return;
+
+    lastPredictionRef.current = { word: prediction.word, at: now };
     setSentence((prev) => [...prev.slice(-9), prediction.word]); // keep last 10
 
     if (ttsEnabled && 'speechSynthesis' in window) {
@@ -37,7 +53,7 @@ export function PredictionDisplay({
       utt.rate = 0.9;
       window.speechSynthesis.speak(utt);
     }
-  }, [prediction, ttsEnabled, lastPredictionWord]);
+  }, [prediction, ttsEnabled]);
 
   const clearSentence = useCallback(() => setSentence([]), []);
 
@@ -63,7 +79,7 @@ export function PredictionDisplay({
       </div>
 
       {/* Current prediction — large display */}
-      <div className="current-prediction" id="current-prediction">
+      <div className="current-prediction" id="current-prediction" aria-live="polite">
         {prediction ? (
           <>
             <div className="predicted-word" id="predicted-word">
@@ -118,7 +134,7 @@ export function PredictionDisplay({
             Clear
           </button>
         </div>
-        <div className="sentence-text" id="sentence-text">
+        <div className="sentence-text" id="sentence-text" aria-live="polite">
           {sentence.length > 0
             ? sentence.map((w) => w.replace(/_/g, ' ')).join(' ')
             : <span className="sentence-placeholder">Your translated sentence will appear here…</span>

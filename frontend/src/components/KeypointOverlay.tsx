@@ -7,6 +7,12 @@
 
 interface KeypointOverlayProps {
   isMediaPipeReady: boolean;
+  /**
+   * True when a pose is actually detected in the current frame (a person is
+   * visibly in view). Distinct from isMediaPipeReady, which only means the
+   * model finished loading.
+   */
+  isPoseDetected: boolean;
   isActive: boolean;
   bufferLength: number;
   maxBuffer: number;
@@ -14,20 +20,36 @@ interface KeypointOverlayProps {
 
 export function KeypointOverlay({
   isMediaPipeReady,
+  isPoseDetected,
   isActive,
   bufferLength,
   maxBuffer,
 }: KeypointOverlayProps) {
   const progress = Math.min((bufferLength / maxBuffer) * 100, 100);
 
+  // Fixed (Bug #6): three distinct states instead of a single "loaded vs not"
+  // badge that used to claim "Tracking Active" even when nobody was in frame.
+  let statusBadgeClass = 'badge--yellow';
+  let statusText = 'Loading…';
+  let showPulseDot = false;
+
+  if (isMediaPipeReady && isPoseDetected) {
+    statusBadgeClass = 'badge--green';
+    statusText = 'Tracking Active';
+  } else if (isMediaPipeReady && !isPoseDetected) {
+    statusBadgeClass = 'badge--red';
+    statusText = 'No Person Detected';
+    showPulseDot = true;
+  }
+
   return (
     <div className="keypoint-overlay">
       <div className="tracking-badges">
-        <span className={`badge ${isMediaPipeReady ? 'badge--green' : 'badge--yellow'}`}>
-          <span className="badge-dot" />
-          {isMediaPipeReady ? 'Tracking Active' : 'Loading...'}
+        <span className={`badge ${statusBadgeClass}`}>
+          <span className={`badge-dot ${showPulseDot ? 'badge-dot--pulse' : ''}`} />
+          {statusText}
         </span>
-        {isActive && (
+        {isActive && isPoseDetected && (
           <span className="badge badge--red">
             <span className="badge-dot badge-dot--pulse" />
             Gesture Detected
@@ -35,7 +57,7 @@ export function KeypointOverlay({
         )}
       </div>
 
-      {isActive && bufferLength > 0 && (
+      {isActive && isPoseDetected && bufferLength > 0 && (
         <div className="buffer-bar-container" title={`${bufferLength} frames captured`}>
           <div className="buffer-bar" style={{ width: `${progress}%` }} />
         </div>
